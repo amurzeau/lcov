@@ -68,15 +68,18 @@
 use strict;
 use File::Basename;
 use File::Temp qw(tempfile);
+use File::Path qw(mkpath);
 use Getopt::Long;
 use Digest::MD5 qw(md5_base64);
+use Cwd qw /getcwd/;
+use Cwd qw /abs_path/;
 
 
 # Global constants
 our $title            = "LCOV - code coverage report";
 our $lcov_version    = 'LCOV version 1.11';
 our $lcov_url        = "http://ltp.sourceforge.net/coverage/lcov.php";
-our $tool_name        = basename($0);
+our $tool_name        = basename(__FILE__);
 
 # Specify coverage rate limits (in %) for classifying file entries
 # HI:   $hi_limit <= rate <= 100          graph color: green
@@ -304,12 +307,12 @@ our $lcov_func_coverage = 1;
 our $lcov_branch_coverage = 0;
 our $rc_desc_html = 0;    # lcovrc: genhtml_desc_html
 
-our $cwd = `pwd`;    # Current working directory
+our $cwd = getcwd();    # Current working directory
 chomp($cwd);
-our $tool_dir = dirname($0);    # Directory where genhtml tool is installed
+our $tool_dir = abs_path(dirname(__FILE__));    # Directory where genhtml tool is installed
 
 # @todo Needs to be changed
-our $cppfilt = $cwd . "c++filt.exe";
+our $cppfilt = "c++filt";
 sub uniq {
     my @unique;
     my %seen;
@@ -333,12 +336,6 @@ $SIG{__DIE__} = \&die_handler;
 
 # Prettify version string
 $lcov_version =~ s/\$\s*Revision\s*:?\s*(\S+)\s*\$/$1/;
-
-# Add current working directory if $tool_dir is not already an absolute path
-if (! ($tool_dir =~ /^\/(.*)$/))
-{
-    $tool_dir = "$cwd/$tool_dir";
-}
 
 # Check command line for a configuration file name
 Getopt::Long::Configure("pass_through", "no_auto_abbrev");
@@ -560,10 +557,9 @@ if ($demangle_cpp)
 # Make sure output_directory exists, create it if necessary
 if ($output_directory)
 {
-    stat($output_directory);
-
-    if (! -e _)
+    if (! -d $output_directory)
     {
+        print "Create dir $output_directory";
         create_sub_dir($output_directory);
     }
 }
@@ -1141,101 +1137,92 @@ sub process_dir($)
         # Match directory name beginning with $dir_prefix
         $rel_dir = apply_prefix($rel_dir, $dir_prefix);
     }
+
+    $trunc_dir = $rel_dir;
+
+    # Remove leading /
+    if ($rel_dir =~ /^\/(.*)$/)
+    {
+        $rel_dir = substr($rel_dir, 1);
+    }
+
+    # Remove leading D:\
+    if ($rel_dir =~ /^[a-zA-Z]:[\/|\\](.*)$/)
+    {
+        $rel_dir = substr($rel_dir, 3);
+    }
     
-    # FR Skip all mingw files
-    if (!($rel_dir =~ m/mingw/))
+    # Handle files in root directory gracefully
+    $rel_dir = "root" if ($rel_dir eq "");
+    $trunc_dir = "root" if ($trunc_dir eq "");
+
+    $base_dir = get_relative_base_path($rel_dir);
+
+    create_sub_dir($rel_dir);
+    # Match filenames which specify files in this directory, not including
+    # sub-directories
+    foreach $filename (grep(/^\Q$abs_dir\E\/[^\/]*$/,keys(%info_data)))
     {
+        my $page_link;
+        my $func_link;
 
-        $trunc_dir = $rel_dir;
+        ($lines_found, $lines_hit, $fn_found, $fn_hit, $br_found,
+         $br_hit, $testdata, $testfncdata, $testbrdata) =
+            process_file($trunc_dir, $rel_dir, $filename);
 
-        # Remove leading /
-        if ($rel_dir =~ /^\/(.*)$/)
-        {
-            $rel_dir = substr($rel_dir, 1);
+        $base_name = basename($filename);
+
+        if ($no_sourceview) {
+            $page_link = "";
+        } elsif ($frames) {
+            # Link to frameset page
+            $page_link = "$base_name.gcov.frameset.$html_ext";
+        } else {
+            # Link directory to source code view page
+            $page_link = "$base_name.gcov.$html_ext";
         }
+        $overview{$base_name} = [$lines_found, $lines_hit, $fn_found,
+                     $fn_hit, $br_found, $br_hit,
+                     $page_link,
+                     get_rate($lines_found, $lines_hit),
+                     get_rate($fn_found, $fn_hit),
+                     get_rate($br_found, $br_hit)];
 
-        # Remove leading D:\
-        if ($rel_dir =~ /^[a-zA-Z]:[\/|\\](.*)$/)
-        {
-            $rel_dir = substr($rel_dir, 3);
-        }
-        
-        # Handle files in root directory gracefully
-        $rel_dir = "root" if ($rel_dir eq "");
-        $trunc_dir = "root" if ($trunc_dir eq "");
+        $testhash{$base_name} = $testdata;
+        $testfnchash{$base_name} = $testfncdata;
+        $testbrhash{$base_name} = $testbrdata;
 
-        $base_dir = get_relative_base_path($rel_dir);
+        $overall_found    += $lines_found;
+        $overall_hit    += $lines_hit;
 
-        create_sub_dir($rel_dir);
-        # Match filenames which specify files in this directory, not including
-        # sub-directories
-        foreach $filename (grep(/^\Q$abs_dir\E\/[^\/]*$/,keys(%info_data)))
-        {
-            my $page_link;
-            my $func_link;
+        $total_fn_found += $fn_found;
+        $total_fn_hit   += $fn_hit;
 
-            ($lines_found, $lines_hit, $fn_found, $fn_hit, $br_found,
-             $br_hit, $testdata, $testfncdata, $testbrdata) =
-                process_file($trunc_dir, $rel_dir, $filename);
-
-            $base_name = basename($filename);
-
-            if ($no_sourceview) {
-                $page_link = "";
-            } elsif ($frames) {
-                # Link to frameset page
-                $page_link = "$base_name.gcov.frameset.$html_ext";
-            } else {
-                # Link directory to source code view page
-                $page_link = "$base_name.gcov.$html_ext";
-            }
-            $overview{$base_name} = [$lines_found, $lines_hit, $fn_found,
-                         $fn_hit, $br_found, $br_hit,
-                         $page_link,
-                         get_rate($lines_found, $lines_hit),
-                         get_rate($fn_found, $fn_hit),
-                         get_rate($br_found, $br_hit)];
-
-            $testhash{$base_name} = $testdata;
-            $testfnchash{$base_name} = $testfncdata;
-            $testbrhash{$base_name} = $testbrdata;
-
-            $overall_found    += $lines_found;
-            $overall_hit    += $lines_hit;
-
-            $total_fn_found += $fn_found;
-            $total_fn_hit   += $fn_hit;
-
-            $total_br_found += $br_found;
-            $total_br_hit   += $br_hit;
-        }
-
-        # Create sorted pages
-        foreach (@fileview_sortlist) {
-            # Generate directory overview page (without details)    
-            write_dir_page($fileview_sortname[$_], $rel_dir, $base_dir,
-                       $test_title, $trunc_dir, $overall_found,
-                       $overall_hit, $total_fn_found, $total_fn_hit,
-                       $total_br_found, $total_br_hit, \%overview, {},
-                       {}, {}, 1, $_);
-            if (!$show_details) {
-                next;
-            }
-            # Generate directory overview page including details
-            write_dir_page("-detail".$fileview_sortname[$_], $rel_dir,
-                       $base_dir, $test_title, $trunc_dir,
-                       $overall_found, $overall_hit, $total_fn_found,
-                       $total_fn_hit, $total_br_found, $total_br_hit,
-                       \%overview, \%testhash, \%testfnchash,
-                       \%testbrhash, 1, $_);
-        }
-
-        # Calculate resulting line counts
+        $total_br_found += $br_found;
+        $total_br_hit   += $br_hit;
     }
-    else
-    {
-        info( "Skipping mingw!\n");
+
+    # Create sorted pages
+    foreach (@fileview_sortlist) {
+        # Generate directory overview page (without details)    
+        write_dir_page($fileview_sortname[$_], $rel_dir, $base_dir,
+                   $test_title, $trunc_dir, $overall_found,
+                   $overall_hit, $total_fn_found, $total_fn_hit,
+                   $total_br_found, $total_br_hit, \%overview, {},
+                   {}, {}, 1, $_);
+        if (!$show_details) {
+            next;
+        }
+        # Generate directory overview page including details
+        write_dir_page("-detail".$fileview_sortname[$_], $rel_dir,
+                   $base_dir, $test_title, $trunc_dir,
+                   $overall_found, $overall_hit, $total_fn_found,
+                   $total_fn_hit, $total_br_found, $total_br_hit,
+                   \%overview, \%testhash, \%testfnchash,
+                   \%testbrhash, 1, $_);
     }
+
+    # Calculate resulting line counts
     return ($overall_found, $overall_hit, $total_fn_found, $total_fn_hit, $total_br_found, $total_br_hit);
 }
 
@@ -2653,9 +2640,12 @@ sub get_date_string()
 sub create_sub_dir($)
 {
     my ($dir) = @_;
+    my ($curdir) = getcwd();
 
-    system("mkdir", "-p" ,$dir)
-        and die("ERROR: cannot create directory $dir!\n");
+    if(! -d $dir) {
+        mkpath($dir)
+            or die("ERROR: cannot create directory $dir in $curdir!\n");
+    }
 }
 
 

@@ -56,6 +56,9 @@ use File::Find;
 use File::Spec::Functions qw /abs2rel catdir file_name_is_absolute splitdir
                   splitpath catpath/;
 use Getopt::Long;
+use Cwd qw /abs_path/;
+use Cwd qw /getcwd/;
+use POSIX qw /uname/;
 use Digest::MD5 qw(md5_base64);
 if( $^O eq "msys" )
 {
@@ -66,8 +69,8 @@ if( $^O eq "msys" )
 our $lcov_version    = 'LCOV version 1.11';
 our $lcov_url        = "http://ltp.sourceforge.net/coverage/lcov.php";
 # @todo Needs to be changed
-our $gcov_tool        = "c:\\PATH_to\\gcov.exe";
-our $tool_name        = basename($0);
+our $gcov_tool        = "gcov";
+our $tool_name        = basename(__FILE__);
 
 our $GCOV_VERSION_4_7_0    = 0x40700;
 our $GCOV_VERSION_3_4_0    = 0x30400;
@@ -262,7 +265,7 @@ our $rc_auto_base = 1;
 # FR added temporary file list
 our @filelist;
 
-our $cwd = `pwd`;
+our $cwd = getcwd();
 chomp($cwd);
 
 
@@ -455,7 +458,7 @@ if ($test_name =~ s/\W/_/g)
 # Adjust test name to include uname output if requested
 if ($adjust_testname)
 {
-    $test_name .= "__".`uname -a`;
+    $test_name .= "__".join(' ', POSIX::uname());
     $test_name =~ s/\W/_/g;
 }
 
@@ -546,10 +549,7 @@ if (defined($output_filename) && ($output_filename ne "-"))
 
     # Make $output_filename an absolute path because we're going
     # to change directories while processing files
-    if (!($output_filename =~ /^\/(.*)$/))
-    {
-        $output_filename = $cwd."/".$output_filename;
-    }
+    $output_filename = abs_path($output_filename)
 }
 
 # Build list of directories to identify external files
@@ -1351,58 +1351,7 @@ sub solve_relative_path($$)
     my @dirs;            # holds path elements
     my $result;
 
-    # Convert from Windows path to msys path
-    if( $^O eq "msys" )
-    {
-        # search for a windows drive letter at the beginning
-        ($volume, $directories, $filename) = File::Spec::Win32->splitpath( $dir );
-        if( $volume ne '' )
-        {
-            my $uppercase_volume;
-            # transform c/d\../e/f\g to Windows style c\d\..\e\f\g
-            $dir = File::Spec::Win32->canonpath( $dir );
-            # use Win32 module to retrieve path components
-            # $uppercase_volume is not used any further
-            ( $uppercase_volume, $directories, $filename ) = File::Spec::Win32->splitpath( $dir );
-            @dirs = File::Spec::Win32->splitdir( $directories );
-            
-            # prepend volume, since in msys C: is always mounted to /c
-            $volume =~ s|^([a-zA-Z]+):|/\L$1\E|;
-            unshift( @dirs, $volume );
-            
-            # transform to Unix style '/' path
-            $directories = File::Spec->catdir( @dirs );
-            $dir = File::Spec->catpath( '', $directories, $filename );
-        } else {
-            # eliminate '\' path separators
-            $dir = File::Spec->canonpath( $dir );
-        }
-    }
-
-    $result = $dir;
-    # Prepend path if not absolute
-    if ($dir =~ /^[^\/]/)
-    {
-        $result = "$path/$result";
-    }
-
-    # Remove //
-    $result =~ s/\/\//\//g;
-
-    # Remove .
-    $result =~ s/\/\.\//\//g;
-    $result =~ s/\/\.$/\//g;
-
-    # Remove trailing /
-    $result =~ s/\/$//g;
-
-    # Solve ..
-    while ($result =~ s/\/[^\/]+\/\.\.\//\//)
-    {
-    }
-
-    # Remove preceding ..
-    $result =~ s/^\/\.\.\//\//g;
+    $result = abs_path($dir);
 
     return $result;
 }

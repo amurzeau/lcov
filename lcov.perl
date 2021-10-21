@@ -61,12 +61,14 @@
 #
 
 use strict;
+use Config;
 use File::Basename;
 use File::Path;
 use File::Find;
 use File::Temp qw /tempdir/;
 use File::Spec::Functions qw /abs2rel canonpath catdir catfile catpath
                   file_name_is_absolute rootdir splitdir splitpath/;
+use FindBin;
 use Getopt::Long;
 use Cwd qw /abs_path getcwd/;
 
@@ -74,7 +76,7 @@ use Cwd qw /abs_path getcwd/;
 # Global constants
 our $lcov_version    = 'LCOV version 1.11';
 our $lcov_url        = "http://ltp.sourceforge.net/coverage/lcov.php";
-our $tool_name        = basename($0);
+our $tool_name        = basename(__FILE__);
 
 # Directory containing gcov kernel files
 our $gcov_dir;
@@ -162,7 +164,7 @@ our $version;        # Version option flag
 our $convert_filenames;    # If set, convert filenames when applying diff
 our $strip;        # If set, strip leading directories when applying diff
 our $temp_dir_name;    # Name of temporary directory
-our $cwd = `pwd`;    # Current working directory
+our $cwd = getcwd();    # Current working directory
 our $to_file;        # If set, indicates that output is written to a file
 our $follow;        # If set, indicates that find shall follow links
 our $diff_path = "";    # Path removed from tracefile when applying diff
@@ -181,7 +183,7 @@ our $maxdepth;
 our $no_markers;
 our $config;        # Configuration file contents
 chomp($cwd);
-our $tool_dir = dirname($0);    # Directory where genhtml tool is installed
+our $tool_dir = abs_path(dirname(__FILE__));    # Directory where genhtml tool is installed
 our @temp_dirs;
 our $gcov_gkv;        # gcov kernel support version found on machine
 our $opt_derive_func_data;
@@ -205,7 +207,6 @@ our $br_overall_hit;
 our $func_coverage = 1;
 our $br_coverage = 0;
 
-
 #
 # Code entry point
 #
@@ -217,12 +218,6 @@ $SIG{'QUIT'} = \&abort_handler;
 
 # Prettify version string
 $lcov_version =~ s/\$\s*Revision\s*:?\s*(\S+)\s*\$/$1/;
-
-# Add current working directory if $tool_dir is not already an absolute path
-if (!($tool_dir =~ /^\/(.*)$/) && !($tool_dir =~ /[a-zA-Z]:\\/))
-{
-    $tool_dir = "$cwd/$tool_dir";
-}
 
 # Check command line for a configuration file name
 Getopt::Long::Configure("pass_through", "no_auto_abbrev");
@@ -601,17 +596,24 @@ sub userspace_reset()
 {
     my $current_dir;
     my @file_list;
+    my $rule;
+
+    sub find_da {
+        my $FilePath = $File::Find::name;
+        my $FileName = $_;
+
+        if ($FileName =~ /\.(gc)?da$/ ) {
+            print "Deleting $FilePath\n";
+            unlink $FileName or warn("ERROR: cannot remove file $FilePath!\n");
+        }
+    }
 
     foreach $current_dir (@directory)
     {
         info("Deleting all .da files in $current_dir".
              ($no_recursion?"\n":" and subdirectories\n"));
-        @file_list = `find "$current_dir" $maxdepth $follow -name \\*\\.da -o -name \\*\\.gcda -type f 2>/dev/null`;
-        chomp(@file_list);
-        foreach (@file_list)
-        {
-            unlink($_) or die("ERROR: cannot remove file $_!\n");
-        }
+
+        find(\&find_da, $current_dir);
     }
 }
 
@@ -810,7 +812,7 @@ sub lcov_geninfo(@)
     # Capture data
     info("Capturing coverage data from ".join(" ", @dir)."\n");
     # FR changed path from "$tool_dir/geninfo"
-    @param = ("$tool_dir/geninfo.perl", @dir);
+    @param = ($Config{perlpath}, "$tool_dir/geninfo.perl", @dir);
     if ($output_filename)
     {
         @param = (@param, "--output-filename", $output_filename);
@@ -895,7 +897,7 @@ sub lcov_geninfo(@)
     if (defined($opt_config_file)) {
         @param = (@param, "--config-file", $opt_config_file);
     }
-    printf "@param";
+    printf "@param\n";
     system(@param) and exit($? >> 8);
 }
 
